@@ -1,0 +1,6 @@
+{
+  "OPENAI_API_BASE": "val1",
+  "OPENAI_API_KEY": "val2",
+  "OPENAI_API_TYPE": "val2",
+  "OPENAI_API_VERSION": "val3"
+}
