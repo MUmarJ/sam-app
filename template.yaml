@@ -14,7 +14,116 @@ Globals:
         SECRET_NAME: test/AskRegn/keys
         REGION_NAME: us-east-2
 
+Parameters:
+  vpc:
+    Type: AWS::EC2::VPC::Id
+    Default: vpc-050351f09e40b4853
+  VPCSubnetId1:
+    Type: AWS::EC2::Subnet::Id
+    Default: subnet-09cfe46d2b015215e
+  SystemValue:
+    Type: String
+    Description: Enter System Name
+    Default: "UmarTestGroup"
+  VpcCIDR:
+    Type: String
+    Default: "10.10.16.0/20"
+  Environment:
+    Type: String
+    Default: "dev"
+
 Resources:
+  #IAM_ROLE
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+
+    DependsOn:
+      - LambdaSecurityGroup
+    Properties:
+      RoleName: !Sub "${SystemValue}"
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+                - states.amazonaws.com
+                - events.amazonaws.com
+            Action:
+              - "sts:AssumeRole"
+
+  #SECURITY_GROUP
+  LambdaSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    # Condition: HasFunctionName1
+    Properties:
+      # GroupName: !Sub "SG-${SGEnvironmentValue}-${SystemValue}-${SubSystemValue}"
+      GroupName: !Sub "SG-${SystemValue}"
+      VpcId: !Ref vpc
+      GroupDescription: !Sub "SG-${SystemValue}-Lambda Security Group"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: !Ref VpcCIDR
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      # Tags:
+      #   - Key: Environment
+      #     Value: !Ref TagEnvironmentValue
+      #   - Key: RevenueStream
+      #     Value: !Ref RevenueStreamValue
+      #   - Key: SubSystem
+      #     Value: !Ref SubSystemValue
+      #   - Key: System
+      #     Value: !Ref SystemValue
+      #   - Key: Name
+      #     Value: !Sub "SG-${SGEnvironmentValue}-${SystemValue}-${SubSystemValue}"
+
+  #VPC_ENDPOINT
+  APIGatewayVpcEndpoint:
+    Type: "AWS::EC2::VPCEndpoint"
+    Properties:
+      SubnetIds:
+        - !Ref VPCSubnetId1
+
+      SecurityGroupIds:
+        - !Ref LambdaSecurityGroup
+      ServiceName: !Sub com.amazonaws.${AWS::Region}.execute-api
+      VpcId: !Ref vpc
+      VpcEndpointType: "Interface"
+      PrivateDnsEnabled: false
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: "Allow"
+            Principal: "*"
+            Action:
+              - "execute-api:Invoke"
+            Resource:
+              - !Sub "arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:*******/*"
+
+  # API_GATEWAY
+  ServerlessApi:
+    Type: "AWS::Serverless::Api"
+    Properties:
+      StageName: !Ref "Environment"
+      EndpointConfiguration:
+        Type: "PRIVATE"
+        VPCEndpointIds:
+          - !Ref APIGatewayVpcEndpoint
+      Auth:
+        ResourcePolicy:
+          CustomStatements:
+            {
+              Effect: "Allow",
+              Action: "execute-api:Invoke",
+              Resource: ["execute-api:/*/*/*"],
+              Principal: "*",
+            }
+
   AskRegnFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -26,14 +135,59 @@ Resources:
       Events:
         HelloWorld:
           Type: Api # More info about API Event Source: https://github.com/awslabs/serverless-application-model/blob/master/versions/2016-10-31.md#api
-          EndpointConfiguration:
-            Type: PRIVATE
-            VPCEndpointIds:
-              - vpce-123a123a
-              - vpce-321a321a
           Properties:
             Path: /api-key
             Method: get
+            RestApiId:
+              Ref: ServerlessApi
+
+  #API_POLICY
+  ManagerApiPolicy:
+    Type: "AWS::IAM::ManagedPolicy"
+
+    DependsOn:
+      - LambdaExecutionRole
+    Properties:
+      ManagedPolicyName: !Sub "${SystemValue}"
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: common
+            Effect: Allow
+            Action:
+              - "ec2:CreateNetworkInterface"
+              - "ec2:Describe*"
+              - "ec2:Get*"
+              - "ec2:DeleteNetworkInterface"
+              - "kms:GenerateDataKey"
+              - "kms:ListAliases"
+              - "kms:ListKeys"
+              - "kms:ReEncryptTo"
+              - "kms:CreateKey"
+              - "kms:GenerateRandom"
+              - "kms:ReEncryptFrom"
+              - "logs:CreateLogGroup"
+              - "logs:PutLogEvents"
+              - "logs:CreateLogStream"
+              - "ssm:DescribeParameters"
+              - "lambda:InvokeFunction"
+
+            Resource: "*"
+          - Sid: ssm
+            Effect: Allow
+            Action:
+              - "ssm:GetParametersByPath"
+              - "ssm:GetParameters"
+              - "ssm:GetParameter"
+            Resource:
+              - !Join
+                - ""
+                - - "arn:aws:ssm:"
+                  - !Ref "AWS::Region"
+                  - ":"
+                  - !Ref "AWS::AccountId"
+                  - ":parameter/crx/"
+                  - !Sub "${SystemValue}/*"
 # Outputs:
 #   HelloWorldApi:
 #     Description: "API Gateway endpoint URL for Prod stage for Hello World function"
